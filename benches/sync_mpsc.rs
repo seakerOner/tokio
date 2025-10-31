@@ -288,6 +288,42 @@ fn uncontented_unbounded_recv_many(g: &mut BenchmarkGroup<WallTime>) {
     });
 }
 
+fn permit_send_alive(g: &mut BenchmarkGroup<WallTime>) {
+    let rt = rt();
+
+    g.bench_function("bounded_permit_send_alive", |b| {
+        b.iter(|| {
+            rt.block_on(async move {
+                let (tx, mut rx) = mpsc::channel::<usize>(1024);
+
+                tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+                for i in 0..10_000 {
+                    let permit = tx.reserve().await.unwrap();
+                    permit.send(i);
+                }
+            })
+        })
+    });
+}
+
+fn permit_send_dropped(g: &mut BenchmarkGroup<WallTime>) {
+    let rt = rt();
+
+    g.bench_function("bounded_permit_send_dropped", |b| {
+        b.iter(|| {
+            rt.block_on(async move {
+                let (tx, rx) = mpsc::channel::<usize>(1024);
+
+                let permit = tx.reserve().await.unwrap();
+                drop(rx);
+
+                permit.send(50);
+            })
+        })
+    });
+}
+
 fn bench_create_medium(c: &mut Criterion) {
     let mut group = c.benchmark_group("create_medium");
     create_medium::<1>(&mut group);
@@ -300,6 +336,13 @@ fn bench_send(c: &mut Criterion) {
     let mut group = c.benchmark_group("send");
     send_data::<Medium, 1000>(&mut group, "medium");
     send_data::<Large, 1000>(&mut group, "large");
+    group.finish();
+}
+
+fn bench_permit_send(c: &mut Criterion) {
+    let mut group = c.benchmark_group("permit_send");
+    permit_send_alive(&mut group);
+    permit_send_dropped(&mut group);
     group.finish();
 }
 
@@ -325,7 +368,8 @@ fn bench_uncontented(c: &mut Criterion) {
 
 criterion_group!(create, bench_create_medium);
 criterion_group!(send, bench_send);
+criterion_group!(permit_send, bench_permit_send);
 criterion_group!(contention, bench_contention);
 criterion_group!(uncontented, bench_uncontented);
 
-criterion_main!(create, send, contention, uncontented);
+criterion_main!(create, send, contention, uncontented, permit_send);

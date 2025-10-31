@@ -1509,4 +1509,61 @@ fn drop_all_elements_during_panic() {
     // `mpsc::Chan`'s drop is called, freeing the `Block` memory allocation.
 }
 
+#[maybe_tokio_test]
+async fn test_permit_send_after_rx_drop_drops_value() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    struct FlaggedDrop(Arc<AtomicBool>);
+    impl Drop for FlaggedDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    let (sender, receiver) = mpsc::channel::<FlaggedDrop>(1);
+
+    let permit = sender.reserve().await.unwrap();
+
+    let foo = Arc::new(AtomicBool::new(false));
+
+    drop(receiver);
+
+    permit.send(FlaggedDrop(foo.clone()));
+
+    assert_eq!(foo.load(Ordering::Acquire), true);
+}
+
+#[maybe_tokio_test]
+async fn test_permit_send_after_rx_close_still_sends_value() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    struct FlaggedDrop(Arc<AtomicBool>);
+    impl Drop for FlaggedDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    let (sender, mut receiver) = mpsc::channel::<FlaggedDrop>(1);
+
+    let permit = sender.reserve().await.unwrap();
+
+    let foo = Arc::new(AtomicBool::new(false));
+
+    receiver.close();
+
+    permit.send(FlaggedDrop(foo.clone()));
+
+    assert_eq!(foo.load(Ordering::Acquire), false);
+
+    drop(receiver);
+    assert_eq!(foo.load(Ordering::Acquire), true);
+}
+
 fn is_debug<T: fmt::Debug>(_: &T) {}

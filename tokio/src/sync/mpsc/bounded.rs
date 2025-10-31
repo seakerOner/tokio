@@ -1692,6 +1692,12 @@ impl<T> Permit<'_, T> {
     pub fn send(self, value: T) {
         use std::mem;
 
+        if self.chan.is_rx_dropped() {
+            drop(value);
+            mem::forget(self);
+            return;
+        }
+
         self.chan.send(value);
 
         // Avoid the drop logic

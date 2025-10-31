@@ -12,6 +12,7 @@ use std::fmt;
 use std::panic;
 use std::process;
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::Poll::{Pending, Ready};
 use std::task::{ready, Context, Poll};
 
@@ -58,6 +59,8 @@ pub(super) struct Chan<T, S> {
 
     /// Notifies all tasks listening for the receiver being dropped.
     notify_rx_closed: Notify,
+
+    is_rx_dropped: AtomicBool,
 
     /// Coordinates access to channel's capacity.
     semaphore: S,
@@ -117,6 +120,7 @@ pub(crate) fn channel<T, S: Semaphore>(semaphore: S) -> (Tx<T, S>, Rx<T, S>) {
 
     let chan = Arc::new(Chan {
         notify_rx_closed: Notify::new(),
+        is_rx_dropped: AtomicBool::new(false),
         tx: CachePadded::new(tx),
         semaphore,
         rx_waker: CachePadded::new(AtomicWaker::new()),
@@ -189,6 +193,10 @@ impl<T, S> Tx<T, S> {
     /// Returns `true` if senders belong to the same channel.
     pub(crate) fn same_channel(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    pub(crate) fn is_rx_dropped(&self) -> bool {
+        self.inner.is_rx_dropped.load(Ordering::Acquire)
     }
 }
 
@@ -522,6 +530,8 @@ impl<T, S: Semaphore> Drop for Rx<T, S> {
             };
 
             guard.drain();
+
+            self.inner.is_rx_dropped.store(true, Ordering::Release)
         });
     }
 }
