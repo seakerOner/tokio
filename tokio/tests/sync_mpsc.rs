@@ -1566,4 +1566,84 @@ async fn test_permit_send_after_rx_close_still_sends_value() {
     assert_eq!(foo.load(Ordering::Acquire), true);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_permit_race_send_vs_drop() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Barrier;
+
+    #[derive(Clone)]
+    struct FlaggedDrop(Arc<AtomicBool>);
+    impl Drop for FlaggedDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    let (tx, rx) = mpsc::channel::<FlaggedDrop>(1);
+
+    let barrier = Arc::new(Barrier::new(2));
+    let dropped_flag = Arc::new(AtomicBool::new(false));
+
+    let barrier1 = barrier.clone();
+    let barrier2 = barrier.clone();
+    let dropped_flag_clone = dropped_flag.clone();
+
+    let sender_task = tokio::spawn(async move {
+        let permit = tx.reserve().await.unwrap();
+        barrier1.wait().await;
+        permit.send(FlaggedDrop(dropped_flag_clone));
+    });
+
+    let drop_task = tokio::spawn(async move {
+        barrier2.wait().await;
+        drop(rx);
+    });
+
+    sender_task.await.unwrap();
+    drop_task.await.unwrap();
+
+    assert_eq!(dropped_flag.load(Ordering::Acquire), true)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stress_test_permit_race_send_vs_drop() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Barrier;
+
+    #[derive(Clone)]
+    struct FlaggedDrop(Arc<AtomicBool>);
+    impl Drop for FlaggedDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+
+    for _ in 0..10_000 {
+        let (tx, rx) = mpsc::channel::<FlaggedDrop>(1);
+
+        let barrier = Arc::new(Barrier::new(2));
+        let dropped_flag = Arc::new(AtomicBool::new(false));
+
+        let barrier1 = barrier.clone();
+        let barrier2 = barrier.clone();
+        let dropped_flag_clone = dropped_flag.clone();
+
+        let sender_task = tokio::spawn(async move {
+            let permit = tx.reserve().await.unwrap();
+            barrier1.wait().await;
+            permit.send(FlaggedDrop(dropped_flag_clone));
+        });
+
+        let drop_task = tokio::spawn(async move {
+            barrier2.wait().await;
+            drop(rx);
+        });
+
+        sender_task.await.unwrap();
+        drop_task.await.unwrap();
+
+        assert_eq!(dropped_flag.load(Ordering::Acquire), true)
+    }
+}
+
 fn is_debug<T: fmt::Debug>(_: &T) {}

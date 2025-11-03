@@ -529,9 +529,9 @@ impl<T, S: Semaphore> Drop for Rx<T, S> {
                 sem: &self.inner.semaphore,
             };
 
-            guard.drain();
+            self.inner.is_rx_dropped.store(true, Ordering::Release);
 
-            self.inner.is_rx_dropped.store(true, Ordering::Release)
+            guard.drain();
         });
     }
 }
